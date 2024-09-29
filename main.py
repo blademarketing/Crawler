@@ -1,67 +1,93 @@
+import os
 from flask import Flask, request, jsonify
 from bs4 import BeautifulSoup
 import requests
 from urllib.parse import urlparse, urljoin
-import re
+from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
+
+# Get max pages and depth from environment variables
+MAX_PAGES = int(os.getenv("MAX_PAGES", 50))
+MAX_DEPTH = int(os.getenv("MAX_DEPTH", 1))
 
 # Helper function to check if a URL is internal
 def is_internal_url(url, base_domain):
     parsed_url = urlparse(url)
     return base_domain == parsed_url.netloc
 
-# Function to crawl the website
+# Function to crawl a single page
+def crawl_page(url, base_url, base_domain, depth, visited_urls, proxies):
+    if depth > MAX_DEPTH:
+        return None
+
+    if url in visited_urls or len(visited_urls) >= MAX_PAGES:
+        return None
+
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; Python Crawler)'}
+        response = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract metadata
+        metadata = {meta.get('name', '').lower(): meta.get('content') for meta in soup.find_all('meta')}
+
+        visited_urls.add(url)
+
+        crawled_page = {
+            'url': url,
+            'metadata': metadata,
+            'raw_html': response.text
+        }
+
+        # Find internal links and crawl them (limited by depth and max pages)
+        links = []
+        for link in soup.find_all('a', href=True):
+            full_url = urljoin(base_url, link['href'])
+            if is_internal_url(full_url, base_domain):
+                links.append(full_url)
+
+        return crawled_page, links
+
+    except requests.RequestException as e:
+        print(f"Failed to fetch {url}: {e}")
+        return None
+
+# Function to crawl the website with threading
 def crawl_website(base_url, proxy=None):
-    crawled_pages = {}
     visited_urls = set()
-    to_crawl = [base_url]
     base_domain = urlparse(base_url).netloc
-    count = 0
+    to_crawl = [(base_url, 1)]
+    
+    proxies = {"http": proxy, "https": proxy} if proxy else None
 
-    proxies = {
-        "http": proxy,
-        "https": proxy
-    } if proxy else None
+    all_crawled_data = {}
 
-    headers = {'User-Agent': 'Mozilla/5.0 (compatible; Python Crawler)'}
+    with ThreadPoolExecutor() as executor:
+        while to_crawl and len(visited_urls) < MAX_PAGES:
+            # Get the next set of pages to crawl (at the same depth)
+            current_depth_crawl = [executor.submit(crawl_page, url, base_url, base_domain, depth, visited_urls, proxies) for url, depth in to_crawl]
+            to_crawl = []
 
-    while to_crawl and count < 50:
-        url = to_crawl.pop(0)
-        if url in visited_urls:
-            continue
+            # Process the crawled pages
+            for future in current_depth_crawl:
+                result = future.result()
+                if result:
+                    crawled_page, links = result
+                    all_crawled_data[crawled_page['url']] = crawled_page
 
-        try:
-            # Use proxy if available
-            response = requests.get(url, headers=headers, proxies=proxies, timeout=10)
-            response.raise_for_status()
-            visited_urls.add(url)
+                    # Queue the links for the next depth level
+                    next_depth = depth + 1
+                    if next_depth <= MAX_DEPTH:
+                        to_crawl.extend([(link, next_depth) for link in links if link not in visited_urls and len(visited_urls) < MAX_PAGES])
 
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Extract metadata
-            metadata = {meta.get('name', '').lower(): meta.get('content') for meta in soup.find_all('meta')}
-
-            # Store the crawled page data
-            crawled_pages[url] = {
-                'url': url,
-                'metadata': metadata,
-                'raw_html': response.text
-            }
-
-            # Find all links in the page
-            for link in soup.find_all('a', href=True):
-                full_url = urljoin(base_url, link['href'])
-                if is_internal_url(full_url, base_domain) and full_url not in visited_urls:
-                    to_crawl.append(full_url)
-
-            count += 1
-
-        except requests.RequestException as e:
-            print(f"Failed to fetch {url}: {e}")
-            continue
-
-    return crawled_pages
+    return all_crawled_data
 
 # API endpoint for crawling
 @app.route('/crawl', methods=['POST'])
