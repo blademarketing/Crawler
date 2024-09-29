@@ -63,7 +63,7 @@ def crawl_page(url, base_url, base_domain, depth, visited_urls, proxies):
 def crawl_website(base_url, proxy=None):
     visited_urls = set()
     base_domain = urlparse(base_url).netloc
-    to_crawl = [(base_url, 1)]
+    to_crawl = [(base_url, 1)]  # Starting depth is 1
     
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
@@ -83,7 +83,7 @@ def crawl_website(base_url, proxy=None):
                     all_crawled_data[crawled_page['url']] = crawled_page
 
                     # Queue the links for the next depth level
-                    next_depth = depth + 1
+                    next_depth = depth + 1  # Move to the next depth level
                     if next_depth <= MAX_DEPTH:
                         to_crawl.extend([(link, next_depth) for link in links if link not in visited_urls and len(visited_urls) < MAX_PAGES])
 
