@@ -83,7 +83,7 @@ def crawl_website(base_url, proxy=None):
                     all_crawled_data[crawled_page['url']] = crawled_page
 
                     # Queue the links for the next depth level
-                    next_depth = depth + 1  # Move to the next depth level
+                    next_depth = to_crawl[0][1] + 1 if to_crawl else 1  # Move to the next depth level
                     if next_depth <= MAX_DEPTH:
                         to_crawl.extend([(link, next_depth) for link in links if link not in visited_urls and len(visited_urls) < MAX_PAGES])
 
